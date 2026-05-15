@@ -1,0 +1,72 @@
+services:
+  purrbalancer:
+    build:
+      context: ./PurrBalancer
+      dockerfile: dockerfile
+    container_name: purrbalancer
+    restart: unless-stopped
+    environment:
+      HOST: "+"
+      PORT: "8080"
+      SECRET: "${PURR_SECRET}"
+    networks:
+      - web
+      - purrnet
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      # HTTP -> HTTPS redirect
+      - "traefik.http.routers.purrbalancer-http.rule=Host(`${PURR_DOMAIN}`)"
+      - "traefik.http.routers.purrbalancer-http.entrypoints=http"
+      - "traefik.http.routers.purrbalancer-http.middlewares=purrbalancer-redirect"
+      - "traefik.http.middlewares.purrbalancer-redirect.redirectscheme.scheme=https"
+      # HTTPS API at the root of the domain
+      - "traefik.http.routers.purrbalancer.rule=Host(`${PURR_DOMAIN}`)"
+      - "traefik.http.routers.purrbalancer.entrypoints=https"
+      - "traefik.http.routers.purrbalancer.tls=true"
+      - "traefik.http.routers.purrbalancer.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+      - "traefik.http.routers.purrbalancer.service=purrbalancer"
+      - "traefik.http.services.purrbalancer.loadbalancer.server.port=8080"
+
+  purrlay:
+    build:
+      context: ./PurrLay
+      dockerfile: dockerfile
+    container_name: purrlay
+    restart: unless-stopped
+    depends_on:
+      - purrbalancer
+    environment:
+      HOST: "+"
+      PORT: "8081"
+      SECRET: "${PURR_SECRET}"
+      # Balancer <-> relay HTTP stays on the internal docker network — never hits Traefik.
+      BALANCER_URL: "http://purrbalancer:8080"
+      HOST_ENDPOINT: "http://purrlay:8081"
+      # What clients see / connect to for WebSocket + UDP:
+      HOST_DOMAIN: "${PURR_DOMAIN}"
+      HOST_SSL: "true"
+      HOST_REGION: "${RELAY_REGION}"
+    ports:
+      # UDP transports are exposed directly — no TLS, no benefit to running through Traefik.
+      - "7777:7777/udp"
+      - "7778:7778/udp"
+    networks:
+      - web
+      - purrnet
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      # TCP WebSocket on :6942 with TLS termination — same hostname as the balancer, different port.
+      - "traefik.tcp.routers.purrlay-ws.rule=HostSNI(`${PURR_DOMAIN}`)"
+      - "traefik.tcp.routers.purrlay-ws.entrypoints=purrlay-ws"
+      - "traefik.tcp.routers.purrlay-ws.tls=true"
+      - "traefik.tcp.routers.purrlay-ws.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+      - "traefik.tcp.routers.purrlay-ws.service=purrlay-ws"
+      - "traefik.tcp.services.purrlay-ws.loadbalancer.server.port=6942"
+
+networks:
+  web:
+    external: true
+  purrnet:
+    driver: bridge
