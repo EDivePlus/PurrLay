@@ -47,10 +47,14 @@ services:
       HOST_DOMAIN: "${PURR_DOMAIN}"
       HOST_SSL: "true"
       HOST_REGION: "${RELAY_REGION}"
+      # Browser WebRTC, the public IP is advertised to browsers as the ICE candidate
+      WEBRTC_ENABLED: "true"
+      WEBRTC_PUBLIC_IP: "${WEBRTC_PUBLIC_IP}"
     ports:
       # UDP transports are exposed directly — no TLS, no benefit to running through Traefik.
       - "7777:7777/udp"
       - "7778:7778/udp"
+      - "7779:7779/udp"
     networks:
       - web
       - purrnet
