@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using JetBrains.Annotations;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using PurrBalancer;
 using WatsonWebserver;
 using WatsonWebserver.Core;
@@ -12,6 +13,7 @@ namespace PurrLay;
 internal static class Program
 {
     public static string SECRET_INTERNAL { get; private set; } = "PURRNET";
+    internal static readonly string ProcessInstanceId = Guid.NewGuid().ToString("N");
 
     private static async Task HandleRouting(HttpContextBase context)
     {
@@ -48,6 +50,9 @@ internal static class Program
     [UsedImplicitly]
     struct RelayServer
     {
+        [UsedImplicitly] public string instanceId;
+        [UsedImplicitly] public string? deploymentId;
+        [UsedImplicitly] public bool draining;
         [UsedImplicitly] public string apiEndpoint;
         [UsedImplicitly] public string host;
         [UsedImplicitly] public int udpPort;
@@ -56,8 +61,26 @@ internal static class Program
         [UsedImplicitly] public string region;
     }
 
-    public const int UDP_PORT = 7777;
-    public const int UDP_PORT_V2 = 7778;
+    public static int UDP_PORT => ConfiguredPort("UDP_PORT", 7777);
+    public static int UDP_PORT_V2 => ConfiguredPort("UDP_PORT_V2", 7778);
+    public static int WEBSOCKETS_PORT => ConfiguredPort("WEBSOCKETS_PORT", 6942);
+
+    static int ConfiguredPort(string name, int fallback)
+    {
+        var port = Env.TryGetIntOrDefault(name, fallback);
+        return port is > 0 and <= ushort.MaxValue ? port : throw new ArgumentOutOfRangeException(name);
+    }
+
+    internal static string GetRelayEndpoint()
+    {
+        var ssl = Env.TryGetValueOrDefault("HOST_SSL", "false");
+        var domain = Env.TryGetValueOrDefault("HOST_DOMAIN", Env.TryGetValueOrDefault("HOST", "localhost"));
+        var hostPort = Env.TryGetIntOrDefault("HOST_PORT", -1);
+        var urlPort = hostPort == -1 ? "" : $":{hostPort}";
+
+        return Env.TryGetValueOrDefault("HOST_ENDPOINT",
+            (ssl == "true" ? "https://" : "http://") + domain + urlPort);
+    }
 
     static async void RegisterRelayToBalancer()
     {
@@ -89,22 +112,16 @@ internal static class Program
                 return;
             }
 
-            var hostPort = Env.TryGetIntOrDefault("HOST_PORT", -1);
-            string urlPort = hostPort == -1 ? "" : $":{hostPort}";
-
-            string endpoint = Env.TryGetValueOrDefault("HOST_ENDPOINT", (ssl == "true" ? "https://" : "http://") + domain + urlPort);
-
             var server = new RelayServer
             {
-                apiEndpoint = endpoint,
+                instanceId = ProcessInstanceId,
+                apiEndpoint = GetRelayEndpoint(),
                 host = domain,
                 udpPort = UDP_PORT,
                 udpPortV2 = UDP_PORT_V2,
-                webSocketsPort = 6942,
+                webSocketsPort = WEBSOCKETS_PORT,
                 region = region
             };
-
-            var serverJson = JsonConvert.SerializeObject(server);
 
             while (true)
             {
@@ -113,12 +130,18 @@ internal static class Program
                     using var client = new HttpClient();
                     client.DefaultRequestHeaders.Add("internal_key_secret", SECRET_INTERNAL);
 
+                    var administrationRevision = RelayDeployment.AdministrationRevision;
+                    server.deploymentId = RelayDeployment.DeploymentId;
+                    server.draining = RelayDeployment.Draining;
+                    var serverJson = JsonConvert.SerializeObject(server);
                     using var content = new StringContent(serverJson, Encoding.UTF8, "application/json");
                     using var response = await client.PostAsync($"{balancer}/registerServer", content);
 
                     if (!response.IsSuccessStatusCode)
                         await Console.Error.WriteLineAsync(
                             $"Failed to register server: [{response.StatusCode}] {await response.Content.ReadAsStringAsync()}");
+                    else
+                        RelayDeployment.ApplyRegistrationResponse(JObject.Parse(await response.Content.ReadAsStringAsync()), administrationRevision);
                 }
                 catch (Exception e)
                 {
@@ -157,7 +180,13 @@ internal static class Program
             if (Env.TryGetValue("SECRET", out var secret) && secret != null)
                 SECRET_INTERNAL = secret;
 
-            RegisterRelayToBalancer();
+            RelayDeployment.Initialize(Env.TryGetValueOrDefault("RELAY_DEPLOYMENT_ID", ""),
+                bool.TryParse(Env.TryGetValueOrDefault("RELAY_START_STANDBY", "false"), out var standby) && standby);
+            HTTPRestAPI.webServer = new WebSockets(WEBSOCKETS_PORT);
+            HTTPRestAPI.udpServerV1 = UdpServerFactory.CreateV1(UDP_PORT, HTTPRestAPI.CreateCallbacks(1));
+            HTTPRestAPI.udpServerV2 = UdpServerFactory.CreateV2(UDP_PORT_V2, HTTPRestAPI.CreateCallbacks(2));
+            HTTPRestAPI.webRtcRuntime = WebRtcGatewayRuntime.StartAsync().GetAwaiter().GetResult();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => HTTPRestAPI.webRtcRuntime?.Dispose();
 
             var host = Env.TryGetValueOrDefault("HOST", "localhost");
             var port = Env.TryGetIntOrDefault("PORT", 8081);
@@ -180,6 +209,7 @@ internal static class Program
             }
 
             new Webserver(settings, HandleRouting).Start();
+            RegisterRelayToBalancer();
             
             // Start empty room cleanup task
             _ = Lobby.StartEmptyRoomCleanupTask();

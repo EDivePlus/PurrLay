@@ -12,8 +12,8 @@ primary_region = 'ewr'
 [http_service]
   internal_port = 8081
   force_https = true
-  auto_stop_machines = "stop"
-  auto_start_machines = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
   min_machines_running = 1
   processes = ["app"]
 
@@ -46,3 +46,11 @@ primary_region = 'ewr'
   memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
+
+# Shared WebRTC ICE socket; WEBRTC_PUBLIC_IP must advertise this app's dedicated IPv4.
+[[services]]
+  internal_port = 7779
+  protocol = "udp"
+  processes = ["app"]
+  [[services.ports]]
+    port = 7779
