@@ -16,12 +16,12 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=web"
       # HTTP -> HTTPS redirect
-      - "traefik.http.routers.purrbalancer-http.rule=Host(`${PURR_DOMAIN}`)"
+      - "traefik.http.routers.purrbalancer-http.rule=Host(`${PURR_DOMAIN}`) || Host(`${OLD_PURR_DOMAIN:-${PURR_DOMAIN}}`)"
       - "traefik.http.routers.purrbalancer-http.entrypoints=http"
       - "traefik.http.routers.purrbalancer-http.middlewares=purrbalancer-redirect"
       - "traefik.http.middlewares.purrbalancer-redirect.redirectscheme.scheme=https"
       # HTTPS API at the root of the domain
-      - "traefik.http.routers.purrbalancer.rule=Host(`${PURR_DOMAIN}`)"
+      - "traefik.http.routers.purrbalancer.rule=Host(`${PURR_DOMAIN}`) || Host(`${OLD_PURR_DOMAIN:-${PURR_DOMAIN}}`)"
       - "traefik.http.routers.purrbalancer.entrypoints=https"
       - "traefik.http.routers.purrbalancer.tls=true"
       - "traefik.http.routers.purrbalancer.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
@@ -62,7 +62,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=web"
       # TCP WebSocket on :6942 with TLS termination — same hostname as the balancer, different port.
-      - "traefik.tcp.routers.purrlay-ws.rule=HostSNI(`${PURR_DOMAIN}`)"
+      - "traefik.tcp.routers.purrlay-ws.rule=HostSNI(`${PURR_DOMAIN}`) || HostSNI(`${OLD_PURR_DOMAIN:-${PURR_DOMAIN}}`)"
       - "traefik.tcp.routers.purrlay-ws.entrypoints=purrlay-ws"
       - "traefik.tcp.routers.purrlay-ws.tls=true"
       - "traefik.tcp.routers.purrlay-ws.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
